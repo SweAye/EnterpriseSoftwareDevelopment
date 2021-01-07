@@ -1,0 +1,76 @@
+
+
+- hosts: local
+  connection: local
+  gather_facts: False
+  tasks:
+    - name: Setting up security group
+      ec2_group:
+         name: websever_security_group
+         description: Traffic on port 22 and 80
+         region: us-west-2
+         rules:
+           - proto: tcp
+             from_port: 80
+             to_port: 80
+             cidr_ip: 0.0.0.0/0
+           - proto: tcp
+             from_port: 22
+             to_port: 22
+             cidr_ip: 0.0.0.0/0
+         rules_egress:
+           - proto: all
+             cidr_ip: 0.0.0.0/0
+
+    - name: Provision an instances
+      ec2:
+         key_name: aswe-oregon
+         region: us-west-2
+         instance_type: t2.micro
+         image: ami-0d10b1979afc575ba
+         wait: true
+         exact_count: 1
+         group: websever_security_group
+         vpc_subnet_id: subnet-e6e0bc80
+         assign_public_ip: yes
+         count_tag:
+            Name: webserver
+         instance_tags:
+            Name: webserver
+      register: ec2
+
+    - name: Wait instance to launch
+      wait_for: host={{ item.public_dns_name }} port=22 delay=60 timeout=320 state=started
+      with_items: "{{ ec2.instances }}"
+
+    - name: Add the newly created EC2 instance(s) to the local host group (located inside the directory)
+      local_action: lineinfile
+         dest="./hosts" 
+         regexp={{ item.public_ip }}
+         insertafter="[webserver]" line={{ item.public_ip }}
+      with_items: "{{ ec2.instances }}"
+   
+    - name: Add all instance public IPs to host group
+      add_host: hostname={{ item.public_ip }} groups=webserver
+      with_items: "{{ ec2.instances }}"
+
+- name: Install Apache webserver on the instance
+  hosts: webserver
+  sudo: True
+  remote_user: ubuntu
+  gather_facts: True
+  pre_tasks:
+    - name: 'install python2'
+      raw: sudo apt-get -y install python
+
+       
+  # Run these tasks
+  tasks:
+     - name: Install apache
+       apt: name=apache2 update_cache=yes state=latest
+     - name: Uploading user contents
+       copy: src=files/index.html dest=/var/www/html
+     - name: starting web server
+       service: name=apache2 state=restarted
+
+
